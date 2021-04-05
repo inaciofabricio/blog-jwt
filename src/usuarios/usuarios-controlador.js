@@ -1,26 +1,33 @@
 const Usuario = require('./usuarios-modelo');
 const { InvalidArgumentError, InternalServerError } = require('../erros');
 const jwt = require('jsonwebtoken')
+const tokens = require('./tokens')
+const crypto = require('crypto');
+const moment = require('moment');
+const { EmailVerificacao } = require('./emails')
 
-function criaTokenJWT(usuario) {
-  const payload = { id : usuario.id }
-  const token = jwt.sign(payload, process.env.CHAVE_JWT, { expiresIn: '1s' })
-  return token
+function geraEndereco(rota, token) {
+  const baseURL = process.env.BASE_URL
+  return `${baseURL}${rota}/${token}`
 }
 
 module.exports = {
-  adiciona: async (req, res) => {
+  async adiciona (req, res) {
     const { nome, email, senha } = req.body;
 
     try {
       const usuario = new Usuario({
         nome,
-        email
+        email,
+        emailVerificado: false
       });
-
       await usuario.adicionaSenha(senha);
-
       await usuario.adiciona();
+
+      const token = tokens.verificacaoEmail.cria(usuario.id)
+      const endereco = geraEndereco('/usuario/verifica_email', token)
+      const emailVerificacao = new EmailVerificacao(usuario, endereco)
+      emailVerificacao.enviaEmail().catch(console.log)
 
       res.status(201).json();
     } catch (erro) {
@@ -34,29 +41,39 @@ module.exports = {
     }
   },
 
-  login: (req, res) => {
-    const token = criaTokenJWT(req.user);
-    res.set('Authorization', token)
-    res.status(204).send();
+  async login (req, res) {
+    const accesstoken = tokens.access.cria(req.user.id);
+    const refreshToken = tokens.refresh.cria(req.user.id);
+    res.set('Authorization', accesstoken)
+    res.status(200).json({ refreshToken });
   },
 
-  logout: (req, res) => {
+  async logout (req, res) {
     try {
-      const token = req.token
-      // Criar uma logica de blacklist
-      res.status(204).send();
+      const token = req.token;
+      await tokens.access.invalida(token);
+      res.status(204).json();
     } catch (error) {
-      
+      res.status(500).json({ erro: erro });
     }
-      
   },
 
-  lista: async (req, res) => {
+  async lista (req, res) {
     const usuarios = await Usuario.lista();
     res.json(usuarios);
   },
 
-  deleta: async (req, res) => {
+  async verificaEmail (req, res) {
+    try {
+      const usuario = req.user
+      await usuario.verificaEmail()
+      res.status(200).json();
+    } catch (error) {
+      res.status(500).json({ erro: error });
+    }
+  },
+
+  async deleta (req, res) {
     const usuario = await Usuario.buscaPorId(req.params.id);
     try {
       await usuario.deleta();
